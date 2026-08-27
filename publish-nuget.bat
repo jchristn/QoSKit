@@ -22,6 +22,13 @@ set "CONFIG=Release"
 pushd "%~dp0"
 
 echo.
+echo === Cleaning old packages ===
+del /q "src\QoSKit\bin\%CONFIG%\*.nupkg" 2>nul
+del /q "src\QoSKit\bin\%CONFIG%\*.snupkg" 2>nul
+del /q "src\QoSKit.Persistence.Sqlite\bin\%CONFIG%\*.nupkg" 2>nul
+del /q "src\QoSKit.Persistence.Sqlite\bin\%CONFIG%\*.snupkg" 2>nul
+
+echo.
 echo === Packing (%CONFIG%) ===
 dotnet pack src\QoSKit\QoSKit.csproj -c %CONFIG%
 if errorlevel 1 goto :error
