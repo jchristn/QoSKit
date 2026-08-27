@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/QoSKit.Example/QoSKit.Example.csproj" />
+    <Project Path="src/QoSKit.Persistence.Sqlite/QoSKit.Persistence.Sqlite.csproj" />
+    <Project Path="src/QoSKit/QoSKit.csproj" />
+    <Project Path="src/Test.Automated/Test.Automated.csproj" />
+    <Project Path="src/Test.CrashHarness/Test.CrashHarness.csproj" />
+    <Project Path="src/Test.Nunit/Test.Nunit.csproj" />
+    <Project Path="src/Test.Shared/Test.Shared.csproj" />
+    <Project Path="src/Test.Xunit/Test.Xunit.csproj" />
+  </Folder>
+</Solution>
