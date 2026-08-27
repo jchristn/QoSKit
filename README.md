@@ -5,7 +5,7 @@
 <h1 align="center">QoSKit</h1>
 
 <p align="center">
-  <strong>v0.1.0 &mdash; alpha</strong>
+  <strong>v0.1.1 &mdash; alpha</strong>
 </p>
 
 > **Alpha release.** This is pre-release software. The public API surface is still evolving and may change without notice between `0.x` versions. Pin to an exact version and review the [CHANGELOG](CHANGELOG.md) before upgrading.

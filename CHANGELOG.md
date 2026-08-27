@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-27
+
+### Changed
+- Pinned `SQLitePCLRaw.bundle_e_sqlite3` to 3.0.5 in `QoSKit.Persistence.Sqlite` to resolve the
+  transitive `NU1903` advisory (GHSA-2m69-gcr7-jv3q) on the native SQLite bundle. Builds are now
+  warning-free with warnings-as-errors enabled.
+
 ## [0.1.0] - 2026-08-27
 
 ### Added
@@ -26,5 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Observability via a `QoSKit` `System.Diagnostics.Metrics.Meter` with OpenTelemetry-shaped
   instruments, plus synchronous `QoSQueueStatistics` snapshots.
 
-[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jchristn/QoSKit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jchristn/QoSKit/releases/tag/v0.1.0
