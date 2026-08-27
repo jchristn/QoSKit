@@ -33,13 +33,13 @@ coverage*.xml
 *.trx
 results.json
 
-# SQLite artifacts (persistence tests / local runs)
-*.db
+# SQLite artifacts (persistence tests / local runs).
+# Note: do NOT add "*.sqlite" here — on case-insensitive filesystems it also matches the
+# QoSKit.Persistence.Sqlite project directory and silently excludes the whole project.
+qoskit-test-*.db
+qoskit-crash-*.db
 *.db-wal
 *.db-shm
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
 
 # OS
 .DS_Store
