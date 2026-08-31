@@ -133,7 +133,7 @@ settings.Sources.AddMeter("QoSKit");
 settings.Sources.AddActivitySource("QoSKit");
 ```
 
-The library writes nothing to the console.
+For the full instrument and span reference, configuration switches, collection recipes, cardinality guidance, and a mapping to `show policy-map interface`, see **[TELEMETRY.md](TELEMETRY.md)**. The library writes nothing to the console.
 
 ## Persistence (optional)
 
