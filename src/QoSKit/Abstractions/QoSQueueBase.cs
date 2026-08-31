@@ -3,6 +3,7 @@ namespace QoSKit
     using System;
     using System.Collections;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Runtime.CompilerServices;
     using System.Threading;
     using System.Threading.Tasks;
@@ -18,8 +19,12 @@ namespace QoSKit
     /// held, so a throwing delegate can never leak a lock or stall servicing.
     /// </remarks>
     /// <typeparam name="T">The payload type carried by the queue.</typeparam>
-    public abstract class QoSQueueBase<T> : IQoSQueue<T>
+    public abstract class QoSQueueBase<T> : IQoSQueue<T>, IQoSGaugeSource
     {
+        // The class label used when a discipline sets no traffic class (FIFO, LIFO), matching the
+        // reserved default-class name used by class-based disciplines.
+        private const string DefaultClassLabel = "class-default";
+
         private static int _NameCounter;
 
         private readonly object _Lock = new object();
@@ -29,6 +34,8 @@ namespace QoSKit
         private OverflowPolicy _OverflowPolicy;
         private readonly IQoSTimeProvider _TimeProvider;
         private readonly bool _EnableMetrics;
+        private readonly bool _EnablePerClassMetrics;
+        private readonly bool _EnableTracing;
         private readonly LinkedList<QoSWaiter> _ItemWaiters = new LinkedList<QoSWaiter>();
         private readonly LinkedList<QoSWaiter> _SpaceWaiters = new LinkedList<QoSWaiter>();
 
@@ -39,6 +46,8 @@ namespace QoSKit
         private long _Dequeued;
         private long _Dropped;
         private long _Rejected;
+        private long _ResidentCost;
+        private long _GaugeId;
         private double _TotalWaitMilliseconds;
         private int _Disposed;
 
@@ -64,7 +73,12 @@ namespace QoSKit
             _OverflowPolicy = options.OverflowPolicy;
             _TimeProvider = options.TimeProvider;
             _EnableMetrics = options.EnableMetrics;
+            _EnablePerClassMetrics = options.EnablePerClassMetrics;
+            _EnableTracing = options.EnableTracing;
             _Name = options.Name ?? typeLabel + "-" + Interlocked.Increment(ref _NameCounter).ToString();
+
+            if (_EnableMetrics)
+                _GaugeId = QoSMetrics.RegisterGaugeSource(this);
         }
 
         /// <inheritdoc/>
@@ -148,6 +162,56 @@ namespace QoSKit
         internal int PendingSpaceWaiterCount
         {
             get { lock (_Lock) { return _SpaceWaiters.Count; } }
+        }
+
+        // Pull-gauge surface consumed by the QoSKit meter. Reads are cheap and off the hot path.
+        string IQoSGaugeSource.GaugeQueueName
+        {
+            get { return _Name; }
+        }
+
+        string IQoSGaugeSource.GaugeQueueType
+        {
+            get { return _TypeLabel; }
+        }
+
+        long IQoSGaugeSource.GaugeCapacity
+        {
+            get { lock (_Lock) { return _MaxDepth; } }
+        }
+
+        long IQoSGaugeSource.GaugePeakDepth
+        {
+            get { lock (_Lock) { return _PeakDepth; } }
+        }
+
+        long IQoSGaugeSource.GaugeResidentBytes
+        {
+            get { lock (_Lock) { return _ResidentCost; } }
+        }
+
+        // Maps an entry's traffic class to the metric/span tag value, honoring the per-class switch.
+        // Returns null when per-class breakdown is disabled, which drops the class tag entirely.
+        private string? PerClassLabel(string? key)
+        {
+            if (!_EnablePerClassMetrics)
+                return null;
+            return key ?? DefaultClassLabel;
+        }
+
+        // Emits a policer conform decision (a class policer had tokens and the item was served).
+        // Called by a discipline under the queue lock; constant-time and allocation-free.
+        private protected void ReportPolicerConformed(string className)
+        {
+            if (_EnableMetrics)
+                QoSMetrics.PolicerConformed(_Name, _TypeLabel, PerClassLabel(className));
+        }
+
+        // Emits a policer exceed decision (a class policer had no tokens and the class was throttled).
+        private protected void ReportPolicerExceeded(string className)
+        {
+            if (_EnableMetrics)
+                QoSMetrics.PolicerExceeded(_Name, _TypeLabel, PerClassLabel(className));
         }
 
         /// <summary>
@@ -250,6 +314,7 @@ namespace QoSKit
                 entry.EnqueuedMilliseconds = _TimeProvider.MonotonicMilliseconds;
                 StoreAdd(entry);
                 _Count++;
+                _ResidentCost += entry.Cost;
                 if (_Count > _PeakDepth)
                     _PeakDepth = _Count;
                 _Enqueued++;
@@ -353,6 +418,7 @@ namespace QoSKit
             T evicted = default!;
             bool didEvict = false;
             long evictedSequence = 0;
+            int evictedCost = 0;
 
             lock (_Lock)
             {
@@ -380,8 +446,10 @@ namespace QoSKit
                             {
                                 evicted = old.Item;
                                 evictedSequence = old.Sequence;
+                                evictedCost = old.Cost;
                                 didEvict = true;
                                 _Count--;
+                                _ResidentCost -= old.Cost;
                                 _Dropped++;
                             }
 
@@ -404,18 +472,21 @@ namespace QoSKit
                 }
             }
 
+            string? classLabel = PerClassLabel(entry.Key);
+
             if (didEvict)
             {
                 _Store?.Remove(evictedSequence);
                 if (_EnableMetrics)
-                    QoSMetrics.Dropped(_Name, _TypeLabel, wasResident: true);
+                    QoSMetrics.Dropped(_Name, _TypeLabel, classLabel, DropReason.Oldest, evictedCost, wasResident: true);
                 RaiseDropped(evicted, DropReason.Oldest);
             }
 
             if (droppedNewest)
             {
                 if (_EnableMetrics)
-                    QoSMetrics.Dropped(_Name, _TypeLabel, wasResident: false);
+                    QoSMetrics.Dropped(_Name, _TypeLabel, classLabel, DropReason.Newest, entry.Cost, wasResident: false);
+                TraceEnqueueOutcome(entry, classLabel, "dropped.newest", DropReason.Newest);
                 RaiseDropped(item, DropReason.Newest);
                 return false;
             }
@@ -423,7 +494,8 @@ namespace QoSKit
             if (unknownReject)
             {
                 if (_EnableMetrics)
-                    QoSMetrics.Dropped(_Name, _TypeLabel, wasResident: false);
+                    QoSMetrics.Dropped(_Name, _TypeLabel, classLabel, DropReason.UnknownClass, entry.Cost, wasResident: false);
+                TraceEnqueueOutcome(entry, classLabel, "dropped.unknown_class", DropReason.UnknownClass);
                 RaiseDropped(item, DropReason.UnknownClass);
                 if (throwOnFailure)
                     throw new UnknownClassificationException(_Name, entry.Key);
@@ -433,7 +505,8 @@ namespace QoSKit
             if (full)
             {
                 if (_EnableMetrics)
-                    QoSMetrics.Rejected(_Name, _TypeLabel);
+                    QoSMetrics.Rejected(_Name, _TypeLabel, classLabel, entry.Cost);
+                TraceEnqueueOutcome(entry, classLabel, "rejected", null);
                 if (throwOnFailure)
                     throw new QueueFullException(_Name, _MaxDepth, _MaxDepth);
                 return false;
@@ -443,13 +516,56 @@ namespace QoSKit
             {
                 _Store?.Commit(entry.Sequence, prepared);
                 if (_EnableMetrics)
-                    QoSMetrics.Enqueued(_Name, _TypeLabel);
+                    QoSMetrics.Enqueued(_Name, _TypeLabel, classLabel, entry.Cost);
+                TraceEnqueueOutcome(entry, classLabel, "admitted", null);
                 SignalWaiter(waiterToSignal);
                 RaiseEnqueued(item);
                 return true;
             }
 
             return false;
+        }
+
+        // Opens a short-lived enqueue span recording the admission outcome. Null-cost when no trace
+        // listener is subscribed or tracing is disabled for this queue.
+        private void TraceEnqueueOutcome(QoSEntry<T> entry, string? classLabel, string outcome, DropReason? reason)
+        {
+            if (!_EnableTracing || !QoSTracing.HasListeners)
+                return;
+
+            using (Activity? activity = QoSTracing.Source.StartActivity(QoSTracing.EnqueueSpanName, ActivityKind.Producer))
+            {
+                if (activity == null)
+                    return;
+                activity.SetTag(QoSMetrics.TagQueueName, _Name);
+                activity.SetTag(QoSMetrics.TagQueueType, _TypeLabel);
+                if (classLabel != null)
+                    activity.SetTag(QoSMetrics.TagQueueClass, classLabel);
+                activity.SetTag("qoskit.cost", entry.Cost);
+                activity.SetTag("qoskit.outcome", outcome);
+                if (reason.HasValue)
+                    activity.SetTag(QoSMetrics.TagDropReason, reason.Value.ToString());
+            }
+        }
+
+        // Opens a short-lived dequeue span recording the class, cost, and time the item waited.
+        // Null-cost when no trace listener is subscribed or tracing is disabled for this queue.
+        private void TraceDequeue(string? classLabel, int cost, double waitMilliseconds)
+        {
+            if (!_EnableTracing || !QoSTracing.HasListeners)
+                return;
+
+            using (Activity? activity = QoSTracing.Source.StartActivity(QoSTracing.DequeueSpanName, ActivityKind.Consumer))
+            {
+                if (activity == null)
+                    return;
+                activity.SetTag(QoSMetrics.TagQueueName, _Name);
+                activity.SetTag(QoSMetrics.TagQueueType, _TypeLabel);
+                if (classLabel != null)
+                    activity.SetTag(QoSMetrics.TagQueueClass, classLabel);
+                activity.SetTag("qoskit.cost", cost);
+                activity.SetTag("qoskit.wait_ms", waitMilliseconds);
+            }
         }
 
         /// <summary>
@@ -505,6 +621,8 @@ namespace QoSKit
             T taken = default!;
             long takenSequence = 0;
             double takenWait = 0;
+            int takenCost = 1;
+            string? takenKey = null;
 
             lock (_Lock)
             {
@@ -513,7 +631,10 @@ namespace QoSKit
                 {
                     taken = entry.Item;
                     takenSequence = entry.Sequence;
+                    takenCost = entry.Cost;
+                    takenKey = entry.Key;
                     _Count--;
+                    _ResidentCost -= entry.Cost;
                     _Dequeued++;
                     double wait = _TimeProvider.MonotonicMilliseconds - entry.EnqueuedMilliseconds;
                     if (wait < 0)
@@ -526,9 +647,11 @@ namespace QoSKit
 
             if (took)
             {
+                string? classLabel = PerClassLabel(takenKey);
                 _Store?.Remove(takenSequence);
                 if (_EnableMetrics)
-                    QoSMetrics.Dequeued(_Name, _TypeLabel, takenWait);
+                    QoSMetrics.Dequeued(_Name, _TypeLabel, classLabel, takenCost, takenWait);
+                TraceDequeue(classLabel, takenCost, takenWait);
                 SignalWaiter(spaceWaiter);
                 RaiseDequeued(taken);
                 item = taken;
@@ -623,6 +746,7 @@ namespace QoSKit
             {
                 StoreClear();
                 _Count = 0;
+                _ResidentCost = 0;
             }
 
             _Store?.Clear();
@@ -706,6 +830,7 @@ namespace QoSKit
             entry.EnqueuedMilliseconds = _TimeProvider.MonotonicMilliseconds;
             StoreAdd(entry);
             _Count++;
+            _ResidentCost += entry.Cost;
             if (_Count > _PeakDepth)
                 _PeakDepth = _Count;
             _Enqueued++;
@@ -846,6 +971,9 @@ namespace QoSKit
 
             if (disposing)
             {
+                if (_EnableMetrics)
+                    QoSMetrics.UnregisterGaugeSource(_GaugeId);
+
                 List<QoSWaiter> toCancel = new List<QoSWaiter>();
                 lock (_Lock)
                 {
@@ -857,6 +985,7 @@ namespace QoSKit
                     _SpaceWaiters.Clear();
                     StoreClear();
                     _Count = 0;
+                    _ResidentCost = 0;
                 }
 
                 foreach (QoSWaiter waiter in toCancel)

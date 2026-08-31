@@ -116,6 +116,7 @@ namespace QoSKit
             else if (band >= _Levels)
                 band = _Levels - 1;
             entry.Band = band;
+            entry.Key = "band-" + band.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         /// <inheritdoc/>

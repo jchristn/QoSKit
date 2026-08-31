@@ -5,7 +5,7 @@
 <h1 align="center">QoSKit</h1>
 
 <p align="center">
-  <strong>v0.1.1 &mdash; alpha</strong>
+  <strong>v0.2.0 &mdash; alpha</strong>
 </p>
 
 > **Alpha release.** This is pre-release software. The public API surface is still evolving and may change without notice between `0.x` versions. Pin to an exact version and review the [CHANGELOG](CHANGELOG.md) before upgrading.
@@ -104,7 +104,36 @@ String keys and class names compare case-insensitively by default (`StringCompar
 
 Any queue can be bounded with `MaxDepth` and an `OverflowPolicy` of `Reject` (the default), `DropNewest`, `DropOldest`, or `Block`. Drops and rejections raise events and are counted. Every queue exposes a `Statistics` snapshot — enqueued, dequeued, dropped, rejected, current and peak depth, and average wait time — so you can watch behavior without any external stack.
 
-For hosts that run OpenTelemetry, the same measurements flow through a `System.Diagnostics.Metrics.Meter` named `QoSKit` with OTel-shaped instruments (`qoskit.queue.enqueued`, `qoskit.queue.dequeued`, `qoskit.queue.dropped`, `qoskit.queue.rejected`, `qoskit.queue.depth`, `qoskit.queue.wait.duration`), each tagged with the queue name and type. Emission is on by default and allocates nothing until a listener subscribes; set `EnableMetrics = false` to turn it off. The library writes nothing to the console.
+### Metrics
+
+For hosts that run OpenTelemetry, the same measurements flow through a `System.Diagnostics.Metrics.Meter` named `QoSKit`. Every instrument is tagged with `queue.name`, `queue.type`, and — unless you turn it off — `queue.class`, so a class-based discipline (priority band, CBWFQ/LLQ/WRR class, WFQ flow) reports **per-class**, not just per-queue. That is the difference between an interface counter and `show policy-map interface`.
+
+| Instrument | Kind | Unit | Notes |
+| --- | --- | --- | --- |
+| `qoskit.queue.enqueued` / `.enqueued.bytes` | Counter | items / By | Admitted items and their cost (bytes-equivalent). |
+| `qoskit.queue.dequeued` / `.dequeued.bytes` | Counter | items / By | Serviced items and their cost. |
+| `qoskit.queue.dropped` / `.dropped.bytes` | Counter | items / By | Also tagged `drop.reason` (`newest`, `oldest`, `unknown_class`, `unroutable`). |
+| `qoskit.queue.rejected` / `.rejected.bytes` | Counter | items / By | Rejected by a full queue under `Reject`. |
+| `qoskit.queue.depth` | UpDownCounter | items | Current resident depth. |
+| `qoskit.queue.wait.duration` | Histogram | ms | Per-class wait time; derive p50/p95/p99 downstream. |
+| `qoskit.policer.conformed` / `.exceeded` | Counter | items | LLQ token-bucket: priority-class conform vs. throttle. |
+| `qoskit.queue.capacity` | ObservableGauge | items | Configured `MaxDepth` (0 = unbounded); pull-based. |
+| `qoskit.queue.peak.depth` | ObservableGauge | items | High-water mark; pull-based. |
+| `qoskit.queue.resident.bytes` | ObservableGauge | By | Current resident cost; pull-based. |
+
+Emission is on by default and allocates nothing on the hot path (tags use a stack-allocated `TagList`) until a listener subscribes; the gauges are pull-only and cost nothing until collected. Set `EnableMetrics = false` to turn metrics off, or `EnablePerClassMetrics = false` to drop the `queue.class` tag on a WFQ queue whose dynamic flows would otherwise be unbounded in cardinality.
+
+### Traces
+
+A `System.Diagnostics.ActivitySource` named `QoSKit` opens spans for item admission (`queue.enqueue`), item service (`queue.dequeue`), and each chain hop (`link.move`). A pipeline trace decomposes end-to-end latency **hop by hop** — which queue added the delay, which class, whether the item was moved, met backpressure, or was dropped. Spans are null-cost until a trace listener subscribes; once attached, span volume tracks item volume, so sampling is the collector's job. Turn spans off per queue with `EnableTracing = false` (or per link via `QoSLinkOptions.EnableTracing`).
+
+```csharp
+// Collect with any OTel-shaped host: subscribe to both names.
+settings.Sources.AddMeter("QoSKit");
+settings.Sources.AddActivitySource("QoSKit");
+```
+
+The library writes nothing to the console.
 
 ## Persistence (optional)
 
@@ -175,7 +204,7 @@ Tests use [Touchstone](https://github.com/jchristn/touchstone): the suites are w
 
 ## What is intentionally absent
 
-QoSKit is an in-process library, so there is no Docker image, REST or MCP surface, health endpoint, or bundled observability stack here — those requirements apply to services, not a collection. The core `QoSKit` package depends on nothing beyond the .NET base libraries; SQLite durability lives in the separate, opt-in `QoSKit.Persistence.Sqlite` package, so you only take the native SQLite dependency when you ask for persistence.
+QoSKit is an in-process library, so there is no Docker image, REST or MCP surface, health endpoint, or bundled observability stack (Prometheus/Grafana/Tempo) here — those requirements apply to services, not a collection. QoSKit emits OTel-shaped metrics and traces through its `QoSKit` meter and activity source; standing up a collector and dashboards for them is the host's job, not the library's. The core `QoSKit` package depends on nothing beyond the .NET base libraries; SQLite durability lives in the separate, opt-in `QoSKit.Persistence.Sqlite` package, so you only take the native SQLite dependency when you ask for persistence.
 
 ## License
 

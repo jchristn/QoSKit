@@ -40,6 +40,14 @@ namespace QoSKit
             }
         }
 
+        /// <summary>
+        /// Whether the pump opens a <c>link.move</c> span for each item it moves downstream. Default is
+        /// <c>true</c>. Spans are free until a trace listener subscribes; a chained trace shows the
+        /// hop-by-hop latency of an item across a pipeline. Set to <c>false</c> to suppress link spans
+        /// on a hot pump even when a listener is attached.
+        /// </summary>
+        public bool EnableTracing { get; set; } = true;
+
         /// <summary>Initializes a new instance of the <see cref="QoSLinkOptions"/> class.</summary>
         public QoSLinkOptions()
         {

@@ -57,6 +57,21 @@ namespace QoSKit
         public bool EnableMetrics { get; set; } = true;
 
         /// <summary>
+        /// Whether measurements carry the <c>queue.class</c> tag, giving per-class (per-flow, per-band)
+        /// breakdown. Default is <c>true</c>. Set to <c>false</c> on a weighted-fair queue with an open
+        /// set of dynamically created flows, where an unbounded class tag would multiply series count;
+        /// closed-set disciplines (priority, CBWFQ, LLQ, WRR) keep the class cardinality bounded.
+        /// </summary>
+        public bool EnablePerClassMetrics { get; set; } = true;
+
+        /// <summary>
+        /// Whether the queue opens <c>queue.enqueue</c> and <c>queue.dequeue</c> spans on the QoSKit
+        /// activity source. Default is <c>true</c>. Spans are free until a trace listener subscribes;
+        /// this switch lets a hot queue opt out even when a listener is attached.
+        /// </summary>
+        public bool EnableTracing { get; set; } = true;
+
+        /// <summary>
         /// The time source for aging and policing. Default is <see cref="SystemQoSTimeProvider.Instance"/>.
         /// </summary>
         /// <exception cref="ArgumentNullException">The value is null.</exception>

@@ -2,6 +2,7 @@ namespace QoSKit
 {
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.Threading;
     using System.Threading.Tasks;
 
@@ -143,31 +144,62 @@ namespace QoSKit
         private int DrainSource(IQoSSource<T> source)
         {
             int moved = 0;
+            bool trace = _Options.EnableTracing && QoSTracing.HasListeners;
             for (int k = 0; k < _Options.BatchSize; k++)
             {
                 if (!source.TryPeek(out T item))
                     break;
 
-                bool admitted;
+                // A hop span (null-cost when no listener) captures per-link transfer latency so a
+                // pipeline trace resolves end-to-end time to the exact hop that added it.
+                Activity? activity = trace ? QoSTracing.Source.StartActivity(QoSTracing.MoveSpanName, ActivityKind.Internal) : null;
                 try
                 {
-                    admitted = _Sink.TryEnqueue(item);
-                }
-                catch (Exception)
-                {
-                    // Poison item: discard it from the source and continue.
+                    bool admitted;
+                    try
+                    {
+                        admitted = _Sink.TryEnqueue(item);
+                    }
+                    catch (Exception)
+                    {
+                        // Poison item: discard it from the source and continue.
+                        source.TryDequeue(out T _);
+                        SetLinkTags(activity, source, "poison");
+                        continue;
+                    }
+
+                    if (!admitted)
+                    {
+                        // Backpressure: the sink is full under a reject/block policy.
+                        SetLinkTags(activity, source, "backpressure");
+                        break;
+                    }
+
                     source.TryDequeue(out T _);
-                    continue;
+                    moved++;
+                    SetLinkTags(activity, source, "moved");
                 }
-
-                if (!admitted)
-                    break; // backpressure: the sink is full under a reject/block policy
-
-                source.TryDequeue(out T _);
-                moved++;
+                finally
+                {
+                    activity?.Dispose();
+                }
             }
 
             return moved;
+        }
+
+        private void SetLinkTags(Activity? activity, IQoSSource<T> source, string outcome)
+        {
+            if (activity == null)
+                return;
+            activity.SetTag("qoskit.source", NameOf(source));
+            activity.SetTag("qoskit.sink", NameOf(_Sink));
+            activity.SetTag("qoskit.outcome", outcome);
+        }
+
+        private static string NameOf(object endpoint)
+        {
+            return endpoint is IQoSQueue<T> queue ? queue.Name : endpoint.GetType().Name;
         }
     }
 }

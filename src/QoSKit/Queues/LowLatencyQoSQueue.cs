@@ -123,10 +123,18 @@ namespace QoSKit
                     QoSEntry<T> head = pc.Queue.First.Value;
                     if (pc.RateLimit == null || pc.RateLimit.TryConsume(head.Cost, TimeProvider))
                     {
+                        // A served item under an active policer conformed to its rate; report it so an
+                        // operator can compare conform against exceed per priority class.
+                        if (pc.RateLimit != null)
+                            ReportPolicerConformed(pc.Name);
                         entry = head;
                         pc.Queue.RemoveFirst();
                         return true;
                     }
+
+                    // The class has work but its policer is out of tokens: it is being throttled this
+                    // pass. This is the signal that the priority class hit its configured rate.
+                    ReportPolicerExceeded(pc.Name);
                 }
             }
 
