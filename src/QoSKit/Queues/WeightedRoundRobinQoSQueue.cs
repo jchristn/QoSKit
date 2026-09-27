@@ -144,7 +144,7 @@ namespace QoSKit
         /// <inheritdoc/>
         private protected override void StoreAdd(QoSEntry<T> entry)
         {
-            _Subs[entry.Band].Queue.AddLast(entry);
+            entry.Node = _Subs[entry.Band].Queue.AddLast(entry);
         }
 
         /// <inheritdoc/>
@@ -194,20 +194,28 @@ namespace QoSKit
         /// <inheritdoc/>
         private protected override bool StoreTryPeek(out QoSEntry<T> entry)
         {
-            // Peek does not disturb the deficit scheduler; report the next non-empty sub from the pointer.
-            int n = _Subs.Count;
-            for (int scan = 0; scan < n; scan++)
+            // Peek does not disturb the deficit scheduler; it predicts the entry the next take will serve.
+            WrrSubState<T>? next = SelectNextSub();
+            if (next != null)
             {
-                WrrSubState<T> sub = _Subs[(_Pointer + scan) % n];
-                if (sub.Queue.First != null)
-                {
-                    entry = sub.Queue.First.Value;
-                    return true;
-                }
+                entry = next.Queue.First!.Value;
+                return true;
             }
 
             entry = null!;
             return false;
+        }
+
+        /// <inheritdoc/>
+        private protected override bool StoreRemoveEntry(QoSEntry<T> entry)
+        {
+            if (!base.StoreRemoveEntry(entry))
+                return false;
+
+            // Charge the sub-queue for the service it received out of turn; a resulting debt is repaid
+            // by the weight it accrues on later visits, keeping the long-run shares intact.
+            _Subs[entry.Band].Deficit -= entry.Cost;
+            return true;
         }
 
         /// <inheritdoc/>
@@ -256,6 +264,35 @@ namespace QoSKit
                 for (LinkedListNode<QoSEntry<T>>? node = sub.Queue.First; node != null; node = node.Next)
                     destination.Add(node.Value.Item);
             }
+        }
+
+        // Predicts, without mutating any state, the sub-queue StoreTryTake will serve next. Starting at
+        // the pointer, the take loop visits each sub once per round and adds its weight at the start of
+        // each visit (except a round already started at the pointer); a non-empty sub is served on the
+        // first visit whose deficit covers its head's cost. The earliest such visit across subs wins.
+        private WrrSubState<T>? SelectNextSub()
+        {
+            int n = _Subs.Count;
+            WrrSubState<T>? best = null;
+            long bestStep = long.MaxValue;
+            for (int k = 0; k < n; k++)
+            {
+                WrrSubState<T> sub = _Subs[(_Pointer + k) % n];
+                if (sub.Queue.First == null)
+                    continue;
+
+                long available = sub.Deficit + (sub.RoundStarted ? 0 : sub.Weight);
+                long shortfall = sub.Queue.First.Value.Cost - available;
+                long extraVisits = shortfall > 0 ? (shortfall + sub.Weight - 1) / sub.Weight : 0;
+                long step = k + (extraVisits * n);
+                if (step < bestStep)
+                {
+                    bestStep = step;
+                    best = sub;
+                }
+            }
+
+            return best;
         }
     }
 }

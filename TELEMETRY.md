@@ -61,7 +61,7 @@ All instruments live on a single `System.Diagnostics.Metrics.Meter` named **`QoS
 | `qoskit.queue.depth` | UpDownCounter | items | Current resident depth (pushed on every enqueue/dequeue/resident-drop). |
 | `qoskit.queue.wait.duration` | Histogram | ms | Time each item waited between enqueue and dequeue; **per class**. |
 | `qoskit.policer.conformed` | Counter | items | LLQ priority-class items that had a token and were served. |
-| `qoskit.policer.exceeded` | Counter | items | LLQ priority-class items throttled because the policer had no tokens. |
+| `qoskit.policer.exceeded` | Counter | items | Scheduling passes in which an LLQ priority class had work but its policer had no tokens, so the class was held back. A throttled item can count more than once, as consumers re-check it until the bucket refills. |
 | `qoskit.queue.capacity` | ObservableGauge | items | Configured `MaxDepth` (0 = unbounded); pull-based. |
 | `qoskit.queue.peak.depth` | ObservableGauge | items | High-water mark of resident depth; pull-based. |
 | `qoskit.queue.resident.bytes` | ObservableGauge | By | Current resident cost; pull-based. |

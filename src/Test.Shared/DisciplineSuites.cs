@@ -266,6 +266,30 @@ namespace Test.Shared
                 return Task.CompletedTask;
             }));
 
+            cases.Add(Case("Llq", "OversizeItemRateLimited", "An item costing more than the burst is rate-limited, not stranded", _ =>
+            {
+                ManualTimeProvider time = new ManualTimeProvider();
+                QoSQueueOptions opts = new QoSQueueOptions { TimeProvider = time };
+                TokenBucket bucket = new TokenBucket(ratePerSecond: 10, burst: 1);
+                LowLatencyQoSQueue<DemoItem> q = new LowLatencyQoSQueue<DemoItem>(
+                    new[] { new TrafficClass<DemoItem>("rt", i => i.Tier == "rt", 1, bucket) },
+                    new TrafficClass<DemoItem>[0],
+                    opts,
+                    costSelector: i => i.Cost);
+                q.Enqueue(new DemoItem(1) { Tier = "rt", Cost = 5 });
+                q.Enqueue(new DemoItem(2) { Tier = "rt", Cost = 5 });
+
+                Check.True(q.TryDequeue(out DemoItem first), "an oversize item conforms against a full bucket");
+                Check.Equal(1, first.Id, "first oversize item served");
+                Check.False(q.TryDequeue(out DemoItem _), "the debt it left holds the next one back");
+                time.Advance(400); // the 4-token debt plus the 1-token burst take 500 ms at 10/s
+                Check.False(q.TryDequeue(out DemoItem _), "still repaying the debt");
+                time.Advance(100);
+                Check.True(q.TryDequeue(out DemoItem second), "served once the bucket is full again");
+                Check.Equal(2, second.Id, "second oversize item served");
+                return Task.CompletedTask;
+            }));
+
             return new TestSuiteDescriptor("Llq", "Low-Latency Queuing", cases);
         }
 
@@ -328,6 +352,28 @@ namespace Test.Shared
             {
                 Check.Throws<ArgumentException>(() => new WeightedRoundRobinQoSQueue<DemoItem>(new WeightedSubQueue[0]), "empty set");
                 Check.Throws<ArgumentOutOfRangeException>(() => new WeightedSubQueue("a", 0), "weight < 1");
+                return Task.CompletedTask;
+            }));
+
+            cases.Add(Case("Wrr", "PeekMatchesDequeue", "TryPeek always reports the item TryDequeue serves next", _ =>
+            {
+                WeightedRoundRobinQoSQueue<DemoItem> q = new WeightedRoundRobinQoSQueue<DemoItem>(
+                    new[] { new WeightedSubQueue("a", 2), new WeightedSubQueue("b", 1), new WeightedSubQueue("c", 3) },
+                    subQueueSelector: i => i.Flow,
+                    costSelector: i => i.Cost);
+                string[] flows = { "a", "b", "c" };
+                for (int i = 0; i < 600; i++)
+                    q.Enqueue(new DemoItem(i) { Flow = flows[i % 3], Cost = 1 + (i % 4) });
+
+                int served = 0;
+                while (q.TryPeek(out DemoItem peeked))
+                {
+                    Check.True(q.TryDequeue(out DemoItem taken), "peek implies an item to take");
+                    Check.Equal(peeked.Id, taken.Id, "peek agrees with dequeue at step " + served);
+                    served++;
+                }
+
+                Check.Equal(600, served, "all served");
                 return Task.CompletedTask;
             }));
 

@@ -140,14 +140,15 @@ namespace QoSKit
 
         // Moves up to BatchSize items from a source to the sink, tolerating a throwing sink: an item
         // the sink rejects by throwing (for example a classifier fault) is discarded from the source
-        // so it cannot wedge the pump, and the pump keeps running.
+        // so it cannot wedge the pump, and the pump keeps running. The item removed from the source is
+        // always the item forwarded (see QoSTransfer).
         private int DrainSource(IQoSSource<T> source)
         {
             int moved = 0;
             bool trace = _Options.EnableTracing && QoSTracing.HasListeners;
             for (int k = 0; k < _Options.BatchSize; k++)
             {
-                if (!source.TryPeek(out T item))
+                if (!QoSTransfer.TryPeek(source, out T item, out object? transferToken))
                     break;
 
                 // A hop span (null-cost when no listener) captures per-link transfer latency so a
@@ -160,10 +161,12 @@ namespace QoSKit
                     {
                         admitted = _Sink.TryEnqueue(item);
                     }
-                    catch (Exception)
+                    catch (Exception ex) when (!(ex is ObjectDisposedException))
                     {
-                        // Poison item: discard it from the source and continue.
-                        source.TryDequeue(out T _);
+                        // Poison item: discard exactly that item from the source and continue. A
+                        // disposed sink is not poison; it propagates and stops the pump rather than
+                        // draining the source into a dead end.
+                        QoSTransfer.Take(source, transferToken);
                         SetLinkTags(activity, source, "poison");
                         continue;
                     }
@@ -175,7 +178,7 @@ namespace QoSKit
                         break;
                     }
 
-                    source.TryDequeue(out T _);
+                    QoSTransfer.Take(source, transferToken);
                     moved++;
                     SetLinkTags(activity, source, "moved");
                 }

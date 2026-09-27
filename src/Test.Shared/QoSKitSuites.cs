@@ -28,6 +28,7 @@ namespace Test.Shared
                     ChainingSuites.Suite(),
                     TelemetrySuites.Suite(),
                     LivenessSuites.Suite(),
+                    WakeupSuites.Suite(),
                     PersistenceSuites.Suite(),
                     CrashSuites.Suite(),
                     SoakSuites.Suite()

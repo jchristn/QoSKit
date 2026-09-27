@@ -14,9 +14,9 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>QoSKit</PackageId>
-    <Version>0.2.0</Version>
-    <AssemblyVersion>0.2.0.0</AssemblyVersion>
-    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.2.1</Version>
+    <AssemblyVersion>0.2.1.0</AssemblyVersion>
+    <FileVersion>0.2.1.0</FileVersion>
     <Authors>Joel Christner</Authors>
     <Company>Joel Christner</Company>
     <Product>QoSKit</Product>
@@ -29,7 +29,7 @@
     <PackageTags>qos;queue;priority;wfq;cbwfq;llq;wrr;scheduling;fifo;lifo</PackageTags>
     <PackageIcon>logo.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Alpha (0.2.0). Granular, CCIE-grade observability: per-class (queue.class) metric tags across every instrument, drop.reason on drops, cost/byte counters (enqueued/dequeued/dropped/rejected bytes), LLQ token-bucket policer conform/exceed counters, pull gauges (capacity, peak depth, resident bytes), and a new QoSKit ActivitySource emitting queue.enqueue, queue.dequeue, and link.move spans. Emission stays allocation-free until a listener subscribes; spans are null-cost until a trace listener attaches. New options: EnablePerClassMetrics, EnableTracing (queue) and EnableTracing (link). Public API is subject to change between 0.x releases.</PackageReleaseNotes>
+    <PackageReleaseNotes>Alpha (0.2.1). Fixes: DequeueAsync/ConsumeAsync no longer stall when an LLQ priority class is throttled by its policer and no new traffic arrives (the waiter wakes when the bucket refills); cancelled or faulted waiters forward their wakeup; blocked EnqueueAsync producers wake on Clear or a raised MaxDepth and throw on unknown-class rejection instead of waiting forever; chain pumps and DrainTo remove exactly the item they forwarded (no loss or duplication under concurrent enqueue, policer refill, aging, or WRR deficits); WRR TryPeek now reports the item TryDequeue serves; a policed item costing more than the burst is rate-limited instead of stranded; a disposed sink stops a pump instead of discarding the source. No public API changes. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

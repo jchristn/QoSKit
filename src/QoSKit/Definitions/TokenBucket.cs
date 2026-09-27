@@ -4,7 +4,10 @@ namespace QoSKit
 
     /// <summary>
     /// A token-bucket rate limiter used to police a low-latency priority class. Tokens accrue at a
-    /// fixed rate up to a burst ceiling. Not thread-safe on its own; a queue calls it under its lock.
+    /// fixed rate up to a burst ceiling. An item conforms when the balance covers its cost; an item
+    /// whose cost exceeds the burst conforms once the bucket is full and leaves a negative balance
+    /// (a debt repaid by refill), so it is rate-limited rather than held back forever. Not
+    /// thread-safe on its own; a queue calls it under its lock.
     /// </summary>
     public sealed class TokenBucket
     {
@@ -44,10 +47,13 @@ namespace QoSKit
         }
 
         // Attempts to consume the given number of tokens, refilling first. Returns true if consumed.
+        // An item costing more than the burst conforms once the bucket is full and drives the balance
+        // negative (a debt repaid by later refill), so an oversize item is rate-limited rather than
+        // stranded forever behind a ceiling it can never reach.
         internal bool TryConsume(int tokens, IQoSTimeProvider time)
         {
             Refill(time);
-            if (_Tokens >= tokens)
+            if (Conforms(tokens))
             {
                 _Tokens -= tokens;
                 return true;
@@ -60,7 +66,38 @@ namespace QoSKit
         internal bool HasTokens(int tokens, IQoSTimeProvider time)
         {
             Refill(time);
-            return _Tokens >= tokens;
+            return Conforms(tokens);
+        }
+
+        // Unconditionally charges the given number of tokens, allowing the balance to go negative.
+        // Used when an item is removed outside the normal scheduling decision (a chain pump taking the
+        // exact item it already forwarded) so the class's long-run rate stays honest. Returns true if
+        // the charge conformed (the tokens were available).
+        internal bool Charge(int tokens, IQoSTimeProvider time)
+        {
+            Refill(time);
+            bool conformed = Conforms(tokens);
+            _Tokens -= tokens;
+            return conformed;
+        }
+
+        // Returns the milliseconds until the given number of tokens will conform, or zero if they
+        // already do. Rounds up so a waiter armed with this delay finds the tokens present.
+        internal long MillisecondsUntilConforming(int tokens, IQoSTimeProvider time)
+        {
+            Refill(time);
+            if (Conforms(tokens))
+                return 0;
+            double needed = Math.Min(tokens, _Burst) - _Tokens;
+            double milliseconds = Math.Ceiling(needed * 1000.0 / _RatePerSecond);
+            if (milliseconds >= long.MaxValue)
+                return long.MaxValue;
+            return milliseconds < 1 ? 1 : (long)milliseconds;
+        }
+
+        private bool Conforms(int tokens)
+        {
+            return _Tokens >= Math.Min(tokens, _Burst);
         }
 
         private void Refill(IQoSTimeProvider time)

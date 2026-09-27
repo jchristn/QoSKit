@@ -5,14 +5,14 @@
 <h1 align="center">QoSKit</h1>
 
 <p align="center">
-  <strong>v0.2.0 &mdash; alpha</strong>
+  <strong>v0.2.1 &mdash; alpha</strong>
 </p>
 
 > **Alpha release.** This is pre-release software. The public API surface is still evolving and may change without notice between `0.x` versions. Pin to an exact version and review the [CHANGELOG](CHANGELOG.md) before upgrading.
 
 QoSKit builds Quality-of-Service systems out of queues you compose in code. It ships the scheduling disciplines that networking gear has used for decades — FIFO, LIFO, strict priority, weighted fair queuing, class-based weighted fair queuing, low-latency queuing, and weighted round robin — as ordinary .NET collections. You construct a queue, enqueue work, dequeue work, and chain queues into hierarchies as deep as you need.
 
-QoSKit enables you to apply control over use of potentially congested resources in a way that aligns with your objectives nad your business.
+QoSKit enables you to apply control over use of potentially congested resources in a way that aligns with your objectives and your business.
 
 ## Install
 
@@ -64,7 +64,7 @@ WeightedFairQoSQueue<Job> queue = new WeightedFairQoSQueue<Job>(
 
 **`ClassBasedWeightedFairQoSQueue<T>`** — weighted fair queuing over named classes matched by predicate (first match wins). An implicit, non-removable `class-default` catches everything else, so an item is never unclassifiable.
 
-**`LowLatencyQoSQueue<T>`** — class-based weighted fair queuing plus strict-priority classes served first, optionally policed by a token bucket. Within its rate, priority work jumps the line; above the rate it yields so fair classes are not starved. A priority class with no rate limit is unpoliced strict priority.
+**`LowLatencyQoSQueue<T>`** — class-based weighted fair queuing plus strict-priority classes served first, optionally policed by a token bucket. Within its rate, priority work jumps the line; above the rate it yields so fair classes are not starved. A priority class with no rate limit is unpoliced strict priority. Throttled priority work stays queued, not dropped: `TryDequeue` skips it while the bucket is empty, and an awaiting consumer (`DequeueAsync`, `ConsumeAsync`) wakes on its own when the bucket has refilled enough for the head item — no new traffic is needed to release it. An item whose cost exceeds the bucket's burst is served once the bucket is full and leaves a token debt, so it is rate-limited rather than stranded.
 
 **`WeightedRoundRobinQoSQueue<T>`** — sub-queues served in proportion to weight using deficit round robin. With unit costs this is classic WRR; give it a cost selector and it becomes byte-fair DWRR. Two ingress modes: a balancer that spreads incoming work across sub-queues by weight, or a classifier that routes by a name selector.
 
@@ -92,7 +92,7 @@ await using QoSPipeline<Job> pipeline = await realtime
 Job serviced = await level2.DequeueAsync(cancellationToken);
 ```
 
-The pipeline runs background pumps that move work downstream and honor backpressure, validates the graph (a cycle throws `PipelineCycleException`), and starts and stops as a unit. A `QoSRouter<T>` fans one stream out to many sinks by predicate. There is no limit to how deep a chain goes.
+The pipeline runs background pumps that move work downstream and honor backpressure, validates the graph (a cycle throws `PipelineCycleException`), and starts and stops as a unit. Every hop (a pump or `DrainTo`) removes from the source exactly the item it forwarded, even if a concurrent enqueue, a policer refill, or aging changes the scheduling decision mid-move, so nothing is lost or duplicated; a disposed sink stops its pump rather than draining the source into it. A `QoSRouter<T>` fans one stream out to many sinks by predicate. There is no limit to how deep a chain goes.
 
 ## Classification
 
@@ -102,7 +102,7 @@ String keys and class names compare case-insensitively by default (`StringCompar
 
 ## Bounds, overflow, and observability
 
-Any queue can be bounded with `MaxDepth` and an `OverflowPolicy` of `Reject` (the default), `DropNewest`, `DropOldest`, or `Block`. Drops and rejections raise events and are counted. Every queue exposes a `Statistics` snapshot — enqueued, dequeued, dropped, rejected, current and peak depth, and average wait time — so you can watch behavior without any external stack.
+Any queue can be bounded with `MaxDepth` and an `OverflowPolicy` of `Reject` (the default), `DropNewest`, `DropOldest`, or `Block`. Under `Block`, `EnqueueAsync` waits for capacity and is woken whenever capacity is freed — by a dequeue, `Clear`, or a raised limit; a rejection for any other reason (an unknown class) throws rather than waiting. Drops and rejections raise events and are counted. Every queue exposes a `Statistics` snapshot — enqueued, dequeued, dropped, rejected, current and peak depth, and average wait time — so you can watch behavior without any external stack.
 
 ### Metrics
 
@@ -195,12 +195,12 @@ The code is split deliberately: `Scenarios/` holds the queuing logic and contain
 
 ```
 dotnet build QoSKit.slnx
-dotnet run --project src/Test.Automated          # console runner, colored output
-dotnet test src/Test.Xunit                       # same suites through xUnit
-dotnet test src/Test.Nunit                       # same suites through NUnit
+dotnet run --project src/Test.Automated --framework net10.0   # console runner, colored output
+dotnet test src/Test.Xunit                                    # same suites through xUnit
+dotnet test src/Test.Nunit                                    # same suites through NUnit
 ```
 
-Tests use [Touchstone](https://github.com/jchristn/touchstone): the suites are written once in `Test.Shared` and executed through the console runner, xUnit, and NUnit. They cover each discipline's ordering and fairness, the classification policies, overflow and disposal, asynchronous consumption, concurrency, persistence, multi-threading, and the chaining layer.
+Tests use [Touchstone](https://github.com/jchristn/touchstone): the suites are written once in `Test.Shared` and executed through the console runner, xUnit, and NUnit. They cover each discipline's ordering and fairness, the classification policies, overflow and disposal, asynchronous consumption and wakeups (including policer-throttled work released by refill alone), concurrency, persistence, multi-threading, and the chaining layer.
 
 ## What is intentionally absent
 

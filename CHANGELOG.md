@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-27
+
+### Fixed
+- **Throttled LLQ work no longer stalls async consumers.** When the only resident items were in a
+  low-latency priority class whose token-bucket policer was empty, `DequeueAsync` (and so
+  `ConsumeAsync`) parked until the next *enqueue*, even though the bucket refilled milliseconds
+  later; with no new traffic the items sat indefinitely. A waiter that finds items resident but
+  none eligible now arms a timer for the moment the earliest can conform (clamped to 1 ms–1 s, so it
+  never spins and always re-checks), and re-checks when it fires. Enqueue wakeups work as before;
+  cancellation and disposal still end the wait promptly.
+- **Waiters are always deregistered.** Every exit from `DequeueAsync`/`EnqueueAsync` (success,
+  cancellation, disposal, or a throwing event handler) now unlinks the waiter and releases its
+  cancellation registration and timer. Previously a registration could outlive its wait on a
+  long-lived token, and a waiter could be left registered if the post-registration re-check threw.
+- **No lost wakeups on cancellation races.** A consumer woken for an item that is then cancelled
+  (or faults) passes the wakeup to the next waiting consumer instead of stranding the item; blocked
+  producers do the same for freed capacity.
+- **Blocked producers wake whenever capacity is freed.** `Clear()` and raising `MaxDepth` now wake
+  producers blocked in `EnqueueAsync` under `OverflowPolicy.Block`; before, only a dequeue did.
+- **`EnqueueAsync` under `Block` no longer waits forever on an unknown class.** A rejection for any
+  reason other than a full queue (for example `UnknownKeyPolicy.Reject`) now throws
+  `UnknownClassificationException`, as `Enqueue` does, instead of being mistaken for a full queue.
+- **Chain pumps and `DrainTo` move exactly the item they peeked.** The mover peeked one item,
+  forwarded it, then dequeued whatever the scheduler picked *at that moment*; a concurrent enqueue
+  (LIFO, priority, WFQ), a policer refill (LLQ), aging (priority), or WRR deficit state could make
+  that a different item, silently discarding it and forwarding the peeked one again later. The
+  exact forwarded entry is now removed, with the discipline's service accounting applied. A poison
+  item is likewise discarded exactly.
+- **WRR `TryPeek` reports the item `TryDequeue` serves next.** It previously returned the head of
+  the next non-empty sub-queue, ignoring the deficit scheduler.
+- **An oversize policed item is rate-limited, not stranded.** A priority-class item costing more
+  than its token bucket's burst could never conform and blocked its class forever; it now conforms
+  once the bucket is full and leaves a token debt repaid by refill.
+- **A disposed sink stops its pump.** `QoSLink` treated `ObjectDisposedException` from the sink as a
+  poison item and discarded the source's items one by one; the pump now stops and leaves them queued.
+
+### Changed
+- `qoskit.policer.exceeded` is documented as counting scheduling passes in which a class was held
+  back (a throttled item can be counted more than once as consumers re-check it), which is what it
+  has always measured.
+
 ## [0.2.0] - 2026-08-30
 
 ### Added
@@ -57,7 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Observability via a `QoSKit` `System.Diagnostics.Metrics.Meter` with OpenTelemetry-shaped
   instruments, plus synchronous `QoSQueueStatistics` snapshots.
 
-[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jchristn/QoSKit/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jchristn/QoSKit/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jchristn/QoSKit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jchristn/QoSKit/releases/tag/v0.1.0

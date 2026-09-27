@@ -126,7 +126,7 @@ namespace QoSKit
             double start = Math.Max(_VirtualTime, flow.LastFinish);
             entry.VirtualFinish = start + entry.Cost / flow.Weight;
             flow.LastFinish = entry.VirtualFinish;
-            flow.Queue.AddLast(entry);
+            entry.Node = flow.Queue.AddLast(entry);
         }
 
         /// <inheritdoc/>
@@ -157,6 +157,15 @@ namespace QoSKit
 
             entry = null!;
             return false;
+        }
+
+        /// <inheritdoc/>
+        private protected override bool StoreRemoveEntry(QoSEntry<T> entry)
+        {
+            if (!base.StoreRemoveEntry(entry))
+                return false;
+            _VirtualTime = entry.VirtualFinish;
+            return true;
         }
 
         /// <inheritdoc/>

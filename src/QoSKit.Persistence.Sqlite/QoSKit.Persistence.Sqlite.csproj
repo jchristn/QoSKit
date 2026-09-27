@@ -9,9 +9,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <PackageId>QoSKit.Persistence.Sqlite</PackageId>
-    <Version>0.2.0</Version>
-    <AssemblyVersion>0.2.0.0</AssemblyVersion>
-    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.2.1</Version>
+    <AssemblyVersion>0.2.1.0</AssemblyVersion>
+    <FileVersion>0.2.1.0</FileVersion>
     <Authors>Joel Christner</Authors>
     <Company>Joel Christner</Company>
     <Product>QoSKit</Product>
@@ -24,7 +24,7 @@
     <PackageTags>qos;queue;persistence;sqlite;durability;wal</PackageTags>
     <PackageIcon>logo.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Alpha (0.2.0). Tracks the QoSKit 0.2.0 observability release; recovered items are reflected in the resident-cost pull gauge. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
+    <PackageReleaseNotes>Alpha (0.2.1). Tracks the QoSKit 0.2.1 wakeup and chaining fixes; no changes to the SQLite store. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

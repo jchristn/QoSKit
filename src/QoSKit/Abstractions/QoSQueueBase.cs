@@ -25,6 +25,15 @@ namespace QoSKit
         // reserved default-class name used by class-based disciplines.
         private const string DefaultClassLabel = "class-default";
 
+        // Bounds on the re-check delay an async consumer arms when items are resident but none is
+        // currently eligible (an LLQ priority class throttled by its policer). The floor keeps a
+        // computed delay of zero from spinning; the ceiling is a safety-net poll, so a consumer
+        // re-checks at least this often even if a discipline cannot predict eligibility.
+        private const long MinimumEligibilityDelayMilliseconds = 1;
+        private const long MaximumEligibilityDelayMilliseconds = 1000;
+
+        private static readonly TimerCallback _EligibilityTimerCallback = OnEligibilityTimer;
+
         private static int _NameCounter;
 
         private readonly object _Lock = new object();
@@ -247,6 +256,9 @@ namespace QoSKit
             {
                 _MaxDepth = maxDepth;
             }
+
+            // A raised limit frees capacity that no dequeue will announce; let blocked producers retry.
+            WakeAllWaiters(_SpaceWaiters);
         }
 
         /// <summary>Sets the overflow policy (fluent configuration).</summary>
@@ -367,6 +379,63 @@ namespace QoSKit
         /// <summary>Removes all entries from the discipline structure. Called under the lock.</summary>
         private protected abstract void StoreClear();
 
+        /// <summary>
+        /// Removes a specific resident entry, applying the discipline's service accounting as if it had
+        /// been scheduled. Used by chain pumps so the item removed from a source is exactly the item
+        /// already forwarded downstream, even if the scheduling decision changed in between (a
+        /// concurrent enqueue, a policer refill, or aging). Called under the lock. The default takes
+        /// through <see cref="StoreTryTake"/> when the entry is still next in service order, and
+        /// otherwise unlinks it through <see cref="StoreRemoveEntry"/>.
+        /// </summary>
+        /// <param name="entry">The entry to remove.</param>
+        /// <returns><c>true</c> if the entry was resident and was removed; otherwise <c>false</c>.</returns>
+        private protected virtual bool StoreTryTakeEntry(QoSEntry<T> entry)
+        {
+            if (entry.Node == null || entry.Node.List == null)
+                return false;
+
+            if (StoreTryPeek(out QoSEntry<T> next) && ReferenceEquals(next, entry))
+            {
+                bool took = StoreTryTake(out QoSEntry<T> taken);
+                Debug.Assert(took && ReferenceEquals(taken, entry), "A discipline's peek and take must agree under the lock.");
+                return took;
+            }
+
+            return StoreRemoveEntry(entry);
+        }
+
+        /// <summary>
+        /// Unlinks a specific resident entry that is not next in service order, charging any
+        /// discipline state (virtual time, deficit) for it. Called under the lock. The default only
+        /// unlinks the entry from its list.
+        /// </summary>
+        /// <param name="entry">The entry to remove.</param>
+        /// <returns><c>true</c> if the entry was resident and was removed; otherwise <c>false</c>.</returns>
+        private protected virtual bool StoreRemoveEntry(QoSEntry<T> entry)
+        {
+            LinkedListNode<QoSEntry<T>>? node = entry.Node;
+            LinkedList<QoSEntry<T>>? list = node?.List;
+            if (node == null || list == null)
+                return false;
+            list.Remove(node);
+            return true;
+        }
+
+        /// <summary>
+        /// Reports how long until the earliest resident-but-ineligible entry can become eligible, for a
+        /// discipline whose <see cref="StoreTryTake"/> can decline while entries are resident (an LLQ
+        /// priority class throttled by its token-bucket policer). Called under the lock, only after a
+        /// take has failed with entries resident. The default reports nothing, in which case an async
+        /// consumer falls back to a bounded re-check poll.
+        /// </summary>
+        /// <param name="delayMilliseconds">The delay in milliseconds, zero or greater, when the method returns <c>true</c>.</param>
+        /// <returns><c>true</c> if a delay was computed; otherwise <c>false</c>.</returns>
+        private protected virtual bool StoreTryGetNextEligibleDelay(out long delayMilliseconds)
+        {
+            delayMilliseconds = 0;
+            return false;
+        }
+
         /// <summary>Appends resident items to the destination in a stable order. Called under the lock.</summary>
         /// <param name="destination">The list to append to.</param>
         private protected abstract void StoreSnapshot(List<T> destination);
@@ -396,6 +465,15 @@ namespace QoSKit
         /// <returns><c>true</c> if the item was admitted; otherwise <c>false</c>.</returns>
         protected bool EnqueueInternal(T item, object? classificationOverride, bool throwOnFailure)
         {
+            return EnqueueCore(item, classificationOverride, throwOnFailure, throwOnFailure, out bool _);
+        }
+
+        // Admits an item. throwWhenFull governs only the full-queue rejection, which is also reported
+        // through full, so an async producer under the Block policy waits for space only when the queue
+        // is actually full and never mistakes another rejection (an unknown class) for a full queue.
+        private bool EnqueueCore(T item, object? classificationOverride, bool throwOnFailure, bool throwWhenFull, out bool full)
+        {
+            full = false;
             ThrowIfDisposed();
             if (!typeof(T).IsValueType && item is null)
                 throw new ArgumentNullException(nameof(item));
@@ -411,7 +489,6 @@ namespace QoSKit
             object? prepared = _Store?.Prepare(item);
 
             QoSWaiter? waiterToSignal = null;
-            bool full = false;
             bool unknownReject = false;
             bool droppedNewest = false;
             bool added = false;
@@ -507,7 +584,7 @@ namespace QoSKit
                 if (_EnableMetrics)
                     QoSMetrics.Rejected(_Name, _TypeLabel, classLabel, entry.Cost);
                 TraceEnqueueOutcome(entry, classLabel, "rejected", null);
-                if (throwOnFailure)
+                if (throwWhenFull)
                     throw new QueueFullException(_Name, _MaxDepth, _MaxDepth);
                 return false;
             }
@@ -576,35 +653,60 @@ namespace QoSKit
         /// <param name="cancellationToken">A token to cancel the wait.</param>
         /// <returns>A task that completes when the item is admitted.</returns>
         /// <exception cref="ArgumentNullException">The item is null (reference type).</exception>
-        /// <exception cref="OperationCanceledException">The token was cancelled while waiting.</exception>
+        /// <exception cref="OperationCanceledException">The token was cancelled while waiting, or the queue was disposed while waiting.</exception>
+        /// <exception cref="ObjectDisposedException">The queue has been disposed.</exception>
+        /// <exception cref="UnknownClassificationException">The item's class is unknown and the discipline rejects unknown classes.</exception>
         public async ValueTask EnqueueAsync(T item, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
             if (!typeof(T).IsValueType && item is null)
                 throw new ArgumentNullException(nameof(item));
 
-            while (true)
+            bool completed = false;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (_OverflowPolicy != OverflowPolicy.Block)
+                while (true)
                 {
-                    Enqueue(item);
-                    return;
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (_OverflowPolicy != OverflowPolicy.Block)
+                    {
+                        Enqueue(item);
+                        completed = true;
+                        return;
+                    }
+
+                    // Only a full queue waits; any other rejection throws exactly as Enqueue does.
+                    if (EnqueueCore(item, null, true, false, out bool full) || !full)
+                    {
+                        completed = true;
+                        return;
+                    }
+
+                    // Block policy and full: wait for space.
+                    QoSWaiter waiter = RegisterWaiter(_SpaceWaiters, cancellationToken);
+                    try
+                    {
+                        if (EnqueueCore(item, null, true, false, out bool stillFull) || !stillFull)
+                        {
+                            completed = true;
+                            return;
+                        }
+
+                        await waiter.Completion.Task.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        RemoveWaiter(_SpaceWaiters, waiter);
+                    }
                 }
-
-                if (TryEnqueue(item))
-                    return;
-
-                // Block policy and full: wait for space.
-                QoSWaiter waiter = RegisterWaiter(_SpaceWaiters, cancellationToken);
-                if (TryEnqueue(item))
-                {
-                    RemoveWaiter(_SpaceWaiters, waiter);
-                    return;
-                }
-
-                await waiter.Completion.Task.ConfigureAwait(false);
+            }
+            finally
+            {
+                // A space signal this producer absorbed but did not use (it was cancelled or faulted
+                // after being woken) passes to the next blocked producer, so no free slot goes unannounced.
+                if (!completed)
+                    ForwardWakeup(_SpaceWaiters);
             }
         }
 
@@ -615,6 +717,15 @@ namespace QoSKit
         /// <inheritdoc/>
         public bool TryDequeue(out T item)
         {
+            return TryDequeueCore(null, false, out item, out long _);
+        }
+
+        // Takes the next entry (or, for a chain pump, the specific expected entry) with full dequeue
+        // accounting. When the take fails with entries still resident and computeRetryDelay is set,
+        // retryDelayMilliseconds reports when to re-check, clamped to the eligibility bounds; it is
+        // zero otherwise (nothing resident: only an enqueue can help).
+        private bool TryDequeueCore(QoSEntry<T>? expected, bool computeRetryDelay, out T item, out long retryDelayMilliseconds)
+        {
             ThrowIfDisposed();
             QoSWaiter? spaceWaiter = null;
             bool took;
@@ -623,10 +734,33 @@ namespace QoSKit
             double takenWait = 0;
             int takenCost = 1;
             string? takenKey = null;
+            retryDelayMilliseconds = 0;
 
             lock (_Lock)
             {
-                took = StoreTryTake(out QoSEntry<T> entry);
+                QoSEntry<T> entry;
+                if (expected == null)
+                {
+                    took = StoreTryTake(out entry);
+                }
+                else
+                {
+                    took = StoreTryTakeEntry(expected);
+                    entry = expected;
+                }
+
+                if (!took && computeRetryDelay && _Count > 0)
+                {
+                    // Entries are resident but none is eligible now, and no enqueue may ever arrive to
+                    // wake a waiter, so learn when the earliest one can become eligible.
+                    long delay;
+                    if (!StoreTryGetNextEligibleDelay(out delay) || delay > MaximumEligibilityDelayMilliseconds)
+                        delay = MaximumEligibilityDelayMilliseconds;
+                    if (delay < MinimumEligibilityDelayMilliseconds)
+                        delay = MinimumEligibilityDelayMilliseconds;
+                    retryDelayMilliseconds = delay;
+                }
+
                 if (took)
                 {
                     taken = entry.Item;
@@ -679,6 +813,24 @@ namespace QoSKit
             return false;
         }
 
+        // Chain-pump support: peeks the next entry itself, so the pump can later remove exactly that
+        // entry rather than whatever the scheduler would pick at removal time.
+        internal bool TryPeekEntry(out QoSEntry<T> entry)
+        {
+            ThrowIfDisposed();
+            lock (_Lock)
+            {
+                return StoreTryPeek(out entry);
+            }
+        }
+
+        // Chain-pump support: removes a previously peeked entry with full dequeue accounting. Returns
+        // false if the entry already left the queue (taken by another consumer, evicted, or cleared).
+        internal bool TryDequeueEntry(QoSEntry<T> entry)
+        {
+            return TryDequeueCore(entry, false, out T _, out long _);
+        }
+
         /// <inheritdoc/>
         public T Dequeue()
         {
@@ -688,30 +840,60 @@ namespace QoSKit
         }
 
         /// <inheritdoc/>
+        /// <remarks>
+        /// Completes when an item is enqueued or, if items are resident but none is currently eligible
+        /// (a low-latency priority class throttled by its policer), no later than when the earliest of
+        /// them can become eligible; no further enqueue is needed to release them. Cancellation and
+        /// disposal end the wait promptly and always deregister the waiter.
+        /// </remarks>
         public async ValueTask<T> DequeueAsync(CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
 
-            while (true)
+            bool completed = false;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (TryDequeue(out T item))
-                    return item;
-
-                QoSWaiter waiter = RegisterWaiter(_ItemWaiters, cancellationToken);
-
-                // Re-check after registering to close the enqueue/register race.
-                if (TryDequeue(out T raced))
+                while (true)
                 {
-                    RemoveWaiter(_ItemWaiters, waiter);
-                    return raced;
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (TryDequeue(out T item))
+                    {
+                        completed = true;
+                        return item;
+                    }
+
+                    QoSWaiter waiter = RegisterWaiter(_ItemWaiters, cancellationToken);
+                    try
+                    {
+                        // Re-check after registering to close the enqueue/register race; if items are
+                        // resident but ineligible, also learn when to re-check without any enqueue.
+                        if (TryDequeueCore(null, true, out T raced, out long retryDelay))
+                        {
+                            completed = true;
+                            return raced;
+                        }
+
+                        if (retryDelay > 0)
+                            waiter.Timer = new Timer(_EligibilityTimerCallback, waiter, retryDelay, Timeout.Infinite);
+
+                        await waiter.Completion.Task.ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        RemoveWaiter(_ItemWaiters, waiter);
+                    }
+
+                    if (Volatile.Read(ref _Disposed) != 0)
+                        throw new OperationCanceledException();
                 }
-
-                await waiter.Completion.Task.ConfigureAwait(false);
-
-                if (Volatile.Read(ref _Disposed) != 0)
-                    throw new OperationCanceledException();
+            }
+            finally
+            {
+                // An item signal this consumer absorbed but did not use (it was cancelled or faulted
+                // after being woken) passes to the next waiting consumer, so no item is stranded.
+                if (!completed)
+                    ForwardWakeup(_ItemWaiters);
             }
         }
 
@@ -750,6 +932,9 @@ namespace QoSKit
             }
 
             _Store?.Clear();
+
+            // Clearing frees capacity that no dequeue will announce; let blocked producers retry.
+            WakeAllWaiters(_SpaceWaiters);
         }
 
         /// <inheritdoc/>
@@ -849,15 +1034,14 @@ namespace QoSKit
         private QoSWaiter RegisterWaiter(LinkedList<QoSWaiter> list, CancellationToken cancellationToken)
         {
             QoSWaiter waiter = new QoSWaiter();
-            lock (_Lock)
-            {
-                waiter.Node = list.AddLast(waiter);
-            }
 
+            // Register for cancellation before publishing the waiter, so the registration is written
+            // only by the owning task and never read by a signalling thread mid-write.
             if (cancellationToken.CanBeCanceled)
             {
                 // On cancellation, remove the waiter from the registry immediately so it never
-                // lingers — the registry heals itself rather than waiting for a later sweep.
+                // lingers — the registry heals itself rather than waiting for a later sweep. The owner
+                // disposes the registration when it deregisters.
                 waiter.Registration = cancellationToken.Register(() =>
                 {
                     lock (_Lock)
@@ -870,26 +1054,80 @@ namespace QoSKit
                     }
 
                     waiter.Completion.TrySetCanceled();
-                    // Release the registration from within its own callback (returns immediately).
-                    waiter.Registration.Dispose();
                 });
+            }
+
+            lock (_Lock)
+            {
+                if (Volatile.Read(ref _Disposed) != 0)
+                    waiter.Completion.TrySetCanceled();
+                else if (!waiter.Completion.Task.IsCompleted)
+                    waiter.Node = list.AddLast(waiter);
             }
 
             return waiter;
         }
 
+        // Deregisters a waiter on every exit path of its owner: unlinks it if still registered and
+        // releases its cancellation registration and eligibility timer. Idempotent.
         private void RemoveWaiter(LinkedList<QoSWaiter> list, QoSWaiter waiter)
         {
             lock (_Lock)
             {
                 if (waiter.Node != null && waiter.Node.List == list)
-                {
                     list.Remove(waiter.Node);
-                    waiter.Node = null;
-                }
+                waiter.Node = null;
+            }
+
+            Timer? timer = waiter.Timer;
+            if (timer != null)
+            {
+                waiter.Timer = null;
+                timer.Dispose();
             }
 
             waiter.Registration.Dispose();
+        }
+
+        // Passes a wakeup to the next waiter while its condition still holds (items resident, or free
+        // capacity) after a woken waiter exits without using its signal. A spurious wakeup is harmless:
+        // the woken waiter re-checks and re-registers.
+        private void ForwardWakeup(LinkedList<QoSWaiter> list)
+        {
+            if (Volatile.Read(ref _Disposed) != 0)
+                return;
+
+            QoSWaiter? waiter;
+            lock (_Lock)
+            {
+                bool available = ReferenceEquals(list, _ItemWaiters)
+                    ? _Count > 0
+                    : _MaxDepth == 0 || _Count < _MaxDepth;
+                if (!available)
+                    return;
+                waiter = DequeueOneWaiter(list);
+            }
+
+            SignalWaiter(waiter);
+        }
+
+        private void WakeAllWaiters(LinkedList<QoSWaiter> list)
+        {
+            List<QoSWaiter>? toWake = null;
+            lock (_Lock)
+            {
+                QoSWaiter? waiter;
+                while ((waiter = DequeueOneWaiter(list)) != null)
+                {
+                    toWake ??= new List<QoSWaiter>();
+                    toWake.Add(waiter);
+                }
+            }
+
+            if (toWake == null)
+                return;
+            foreach (QoSWaiter waiter in toWake)
+                SignalWaiter(waiter);
         }
 
         private QoSWaiter? DequeueOneWaiter(LinkedList<QoSWaiter> list)
@@ -913,8 +1151,12 @@ namespace QoSKit
         {
             if (waiter == null)
                 return;
-            waiter.Registration.Dispose();
             waiter.Completion.TrySetResult(true);
+        }
+
+        private static void OnEligibilityTimer(object? state)
+        {
+            ((QoSWaiter)state!).Completion.TrySetResult(true);
         }
 
         private void RaiseEnqueued(T item)
@@ -988,11 +1230,9 @@ namespace QoSKit
                     _ResidentCost = 0;
                 }
 
+                // Each owner releases its own registration and timer as its wait unwinds.
                 foreach (QoSWaiter waiter in toCancel)
-                {
-                    waiter.Registration.Dispose();
                     waiter.Completion.TrySetCanceled();
-                }
 
                 IQoSStore<T>? store = _Store;
                 if (store != null)

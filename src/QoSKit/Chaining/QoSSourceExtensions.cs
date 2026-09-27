@@ -30,11 +30,11 @@ namespace QoSKit
                 throw new ArgumentOutOfRangeException(nameof(max), "max must be zero or greater.");
 
             int moved = 0;
-            while (moved < max && source.TryPeek(out T item))
+            while (moved < max && QoSTransfer.TryPeek(source, out T item, out object? transferToken))
             {
                 if (!sink.TryEnqueue(item))
                     break;
-                source.TryDequeue(out T _);
+                QoSTransfer.Take(source, transferToken);
                 moved++;
             }
 
@@ -65,11 +65,11 @@ namespace QoSKit
             while (moved < max)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!source.TryPeek(out T item))
+                if (!QoSTransfer.TryPeek(source, out T item, out object? transferToken))
                     break;
                 if (!sink.TryEnqueue(item))
                     break;
-                source.TryDequeue(out T _);
+                QoSTransfer.Take(source, transferToken);
                 moved++;
                 await Task.Yield();
             }

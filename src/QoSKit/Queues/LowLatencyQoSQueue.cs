@@ -6,7 +6,9 @@ namespace QoSKit
     /// <summary>
     /// A low-latency queue (LLQ): one or more strict-priority classes served ahead of a set of
     /// weighted-fair classes. Each priority class may carry a token-bucket policer; a null policer is
-    /// unpoliced strict priority (which can starve fair classes). Thread-safe.
+    /// unpoliced strict priority (which can starve fair classes). Over-rate priority items stay queued:
+    /// a synchronous take skips them until the policer refills, and an awaiting consumer is woken when
+    /// the earliest of them becomes eligible, with no further enqueue required. Thread-safe.
     /// </summary>
     /// <typeparam name="T">The payload type carried by the queue.</typeparam>
     public sealed class LowLatencyQoSQueue<T> : QoSQueueBase<T>
@@ -100,7 +102,7 @@ namespace QoSKit
         {
             if (entry.Band < _PriorityClasses.Count)
             {
-                _PriorityClasses[entry.Band].Queue.AddLast(entry);
+                entry.Node = _PriorityClasses[entry.Band].Queue.AddLast(entry);
             }
             else
             {
@@ -108,7 +110,7 @@ namespace QoSKit
                 double start = Math.Max(_VirtualTime, cls.LastFinish);
                 entry.VirtualFinish = start + entry.Cost / cls.Weight;
                 cls.LastFinish = entry.VirtualFinish;
-                cls.Queue.AddLast(entry);
+                entry.Node = cls.Queue.AddLast(entry);
             }
         }
 
@@ -177,6 +179,50 @@ namespace QoSKit
 
             entry = null!;
             return false;
+        }
+
+        /// <inheritdoc/>
+        private protected override bool StoreTryTakeEntry(QoSEntry<T> entry)
+        {
+            // The policer is time-dependent, so the scheduling decision can change between a pump's
+            // peek and its take; remove the exact entry and charge it as served instead.
+            if (!StoreRemoveEntry(entry))
+                return false;
+
+            if (entry.Band < _PriorityClasses.Count)
+            {
+                LlqPriorityState<T> pc = _PriorityClasses[entry.Band];
+                if (pc.RateLimit != null && pc.RateLimit.Charge(entry.Cost, TimeProvider))
+                    ReportPolicerConformed(pc.Name);
+            }
+            else
+            {
+                _VirtualTime = entry.VirtualFinish;
+            }
+
+            return true;
+        }
+
+        /// <inheritdoc/>
+        private protected override bool StoreTryGetNextEligibleDelay(out long delayMilliseconds)
+        {
+            // Only a policed priority class can hold resident work back; its head becomes eligible
+            // once the bucket has refilled enough to cover the head's cost.
+            bool found = false;
+            long earliest = long.MaxValue;
+            for (int i = 0; i < _PriorityClasses.Count; i++)
+            {
+                LlqPriorityState<T> pc = _PriorityClasses[i];
+                if (pc.Queue.First == null)
+                    continue;
+                long delay = pc.RateLimit == null ? 0 : pc.RateLimit.MillisecondsUntilConforming(pc.Queue.First.Value.Cost, TimeProvider);
+                if (delay < earliest)
+                    earliest = delay;
+                found = true;
+            }
+
+            delayMilliseconds = found ? earliest : 0;
+            return found;
         }
 
         /// <inheritdoc/>

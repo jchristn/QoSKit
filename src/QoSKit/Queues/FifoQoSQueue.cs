@@ -62,7 +62,7 @@ namespace QoSKit
         /// <inheritdoc/>
         private protected override void StoreAdd(QoSEntry<T> entry)
         {
-            _Items.AddLast(entry);
+            entry.Node = _Items.AddLast(entry);
         }
 
         /// <inheritdoc/>

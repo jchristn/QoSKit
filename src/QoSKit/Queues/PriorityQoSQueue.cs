@@ -122,7 +122,7 @@ namespace QoSKit
         /// <inheritdoc/>
         private protected override void StoreAdd(QoSEntry<T> entry)
         {
-            _Bands[entry.Band].AddLast(entry);
+            entry.Node = _Bands[entry.Band].AddLast(entry);
         }
 
         /// <inheritdoc/>
@@ -152,6 +152,13 @@ namespace QoSKit
 
             entry = null!;
             return false;
+        }
+
+        /// <inheritdoc/>
+        private protected override bool StoreTryTakeEntry(QoSEntry<T> entry)
+        {
+            // Aging is time-dependent and bands carry no scheduler state, so remove the exact entry.
+            return StoreRemoveEntry(entry);
         }
 
         /// <inheritdoc/>

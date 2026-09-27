@@ -71,6 +71,8 @@ batch.Enqueue(new Job { Tenant = "a" });
 Job serviced = await level2.DequeueAsync(cancellationToken);
 ```
 
+To keep interactive work from starving everything else, police its class with a token bucket — `new TrafficClass<Job>("interactive", j => j.Interactive, rateLimit: new TokenBucket(ratePerSecond: 100, burst: 10))`. Over-rate items wait in the queue rather than being dropped, and are released as the bucket refills: an awaiting consumer or pump picks them up on its own, with no further traffic needed.
+
 ## 5. Many workers
 
 Because queues are thread-safe, point as many workers as you like at one queue with no external locking:
