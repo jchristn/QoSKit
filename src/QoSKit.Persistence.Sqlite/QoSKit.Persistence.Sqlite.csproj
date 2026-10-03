@@ -9,9 +9,9 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <PackageId>QoSKit.Persistence.Sqlite</PackageId>
-    <Version>0.2.1</Version>
-    <AssemblyVersion>0.2.1.0</AssemblyVersion>
-    <FileVersion>0.2.1.0</FileVersion>
+    <Version>0.2.2</Version>
+    <AssemblyVersion>0.2.2.0</AssemblyVersion>
+    <FileVersion>0.2.2.0</FileVersion>
     <Authors>Joel Christner</Authors>
     <Company>Joel Christner</Company>
     <Product>QoSKit</Product>
@@ -24,7 +24,7 @@
     <PackageTags>qos;queue;persistence;sqlite;durability;wal</PackageTags>
     <PackageIcon>logo.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Alpha (0.2.1). Tracks the QoSKit 0.2.1 wakeup and chaining fixes; no changes to the SQLite store. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
+    <PackageReleaseNotes>Alpha (0.2.2). Dependency refresh: Microsoft.Data.Sqlite 10.0.12; tracks QoSKit 0.2.2. No changes to the SQLite store format or public API. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -42,7 +42,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.9" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
   </ItemGroup>
 

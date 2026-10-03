@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-03
+
+### Changed
+- **Dependency refresh.** No behavior or public API changes.
+  - `QoSKit` (netstandard2.0 only): `Microsoft.Bcl.AsyncInterfaces` 8.0.0 → 10.0.12,
+    `System.Diagnostics.DiagnosticSource` 8.0.1 → 10.0.12, `System.Threading.Tasks.Extensions`
+    4.5.4 → 4.6.3. The net8.0 and net10.0 targets remain dependency-free.
+  - `QoSKit.Persistence.Sqlite`: `Microsoft.Data.Sqlite` 9.0.9 → 10.0.12 (store format unchanged).
+  - Tests: `Touchstone.*` 0.1.12 → 0.2.0, `Microsoft.NET.Test.Sdk` 17.14.1 → 18.10.1,
+    `coverlet.collector` 6.0.4 → 10.1.0, `NUnit` 4.3.2 → 5.0.0, `NUnit.Analyzers` 4.7.0 → 4.15.0,
+    `NUnit3TestAdapter` 5.0.0 → 6.3.0, `xunit.runner.visualstudio` 3.1.4 → 4.0.0.
+
 ## [0.2.1] - 2026-09-27
 
 ### Fixed
@@ -98,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Observability via a `QoSKit` `System.Diagnostics.Metrics.Meter` with OpenTelemetry-shaped
   instruments, plus synchronous `QoSQueueStatistics` snapshots.
 
-[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jchristn/QoSKit/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jchristn/QoSKit/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jchristn/QoSKit/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jchristn/QoSKit/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/jchristn/QoSKit/compare/v0.1.0...v0.1.1

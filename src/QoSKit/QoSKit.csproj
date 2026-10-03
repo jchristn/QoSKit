@@ -14,9 +14,9 @@
   <!-- NuGet package metadata -->
   <PropertyGroup>
     <PackageId>QoSKit</PackageId>
-    <Version>0.2.1</Version>
-    <AssemblyVersion>0.2.1.0</AssemblyVersion>
-    <FileVersion>0.2.1.0</FileVersion>
+    <Version>0.2.2</Version>
+    <AssemblyVersion>0.2.2.0</AssemblyVersion>
+    <FileVersion>0.2.2.0</FileVersion>
     <Authors>Joel Christner</Authors>
     <Company>Joel Christner</Company>
     <Product>QoSKit</Product>
@@ -29,7 +29,7 @@
     <PackageTags>qos;queue;priority;wfq;cbwfq;llq;wrr;scheduling;fifo;lifo</PackageTags>
     <PackageIcon>logo.png</PackageIcon>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>Alpha (0.2.1). Fixes: DequeueAsync/ConsumeAsync no longer stall when an LLQ priority class is throttled by its policer and no new traffic arrives (the waiter wakes when the bucket refills); cancelled or faulted waiters forward their wakeup; blocked EnqueueAsync producers wake on Clear or a raised MaxDepth and throw on unknown-class rejection instead of waiting forever; chain pumps and DrainTo remove exactly the item they forwarded (no loss or duplication under concurrent enqueue, policer refill, aging, or WRR deficits); WRR TryPeek now reports the item TryDequeue serves; a policed item costing more than the burst is rate-limited instead of stranded; a disposed sink stops a pump instead of discarding the source. No public API changes. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
+    <PackageReleaseNotes>Alpha (0.2.2). Dependency refresh: netstandard2.0 polyfills updated (Microsoft.Bcl.AsyncInterfaces 10.0.12, System.Diagnostics.DiagnosticSource 10.0.12, System.Threading.Tasks.Extensions 4.6.3). No behavior or public API changes. Public API is subject to change between 0.x releases.</PackageReleaseNotes>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -45,9 +45,9 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="8.0.0" />
-    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
-    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Bcl.AsyncInterfaces" Version="10.0.12" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
