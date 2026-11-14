@@ -3,11 +3,6 @@ name: Tests
 on:
   push:
     branches: [main, develop]
-  pull_request:
-    branches: [main]
-  schedule:
-    # Nightly endurance run (03:17 UTC).
-    - cron: "17 3 * * *"
 
 jobs:
   test:
@@ -45,8 +40,7 @@ jobs:
           path: results.json
 
   endurance:
-    # Long-form soak; runs on the nightly schedule only.
-    if: github.event_name == 'schedule'
+    # Long-form soak; runs on each matching push.
     runs-on: ubuntu-latest
     env:
       QOSKIT_SOAK_SECONDS: "300"
